@@ -1,0 +1,8 @@
+{
+  "name": "직캠 유튜브 도우미",
+  "short_name": "직캠도우미",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#000000"
+}
