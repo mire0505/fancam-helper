@@ -110,9 +110,31 @@
   .dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
   @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
   .search-bar { width: 100%; margin-bottom: 10px; }
+  .lock-screen { position: fixed; inset: 0; background: var(--bg3); display: flex; align-items: center; justify-content: center; z-index: 999; padding: 20px; }
+  .lock-card { background: var(--bg); border-radius: var(--radius-lg); border: 0.5px solid var(--border); padding: 2rem 1.5rem; max-width: 340px; width: 100%; text-align: center; }
+  .lock-icon { font-size: 36px; margin-bottom: 12px; }
+  .lock-title { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
+  .lock-sub { font-size: 13px; color: var(--text2); margin-bottom: 20px; }
+  .lock-input { margin-bottom: 10px; text-align: left; }
+  .lock-err { color: var(--danger); font-size: 13px; margin-top: 8px; min-height: 18px; }
 </style>
 </head>
 <body>
+
+<!-- 잠금 화면 -->
+<div id="lock-screen" class="lock-screen">
+  <div class="lock-card">
+    <div class="lock-icon">🔒</div>
+    <div class="lock-title">직캠 유튜브 도우미</div>
+    <div class="lock-sub">비밀번호를 입력하세요</div>
+    <div class="lock-input">
+      <input type="password" id="pw-input" placeholder="비밀번호 입력" onkeydown="if(event.key==='Enter')checkPassword()" autofocus />
+    </div>
+    <button class="btn-primary" onclick="checkPassword()">확인</button>
+    <div class="lock-err" id="lock-err"></div>
+  </div>
+</div>
+
 <div class="container">
   <div class="header">
     <h1>🎤 직캠 유튜브 도우미</h1>
@@ -228,7 +250,52 @@
 </div>
 
 <script>
+// 비밀번호 확인
+async function checkPassword(){
+  const pw = document.getElementById('pw-input').value;
+  const err = document.getElementById('lock-err');
+  if(!pw){ err.textContent = '비밀번호를 입력해주세요.'; return; }
+  try{
+    const resp = await fetch('/api/generate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({_auth: pw})
+    });
+    const data = await resp.json();
+    if(data._authOk){
+      sessionStorage.setItem('fancam_auth', pw);
+      document.getElementById('lock-screen').style.display = 'none';
+    } else {
+      err.textContent = '비밀번호가 틀렸습니다.';
+      document.getElementById('pw-input').value = '';
+      document.getElementById('pw-input').focus();
+    }
+  } catch(e){
+    err.textContent = '오류가 발생했습니다. 다시 시도해주세요.';
+  }
+}
+
+// 페이지 로드시 세션 확인
+window.addEventListener('load', () => {
+  const saved = sessionStorage.getItem('fancam_auth');
+  if(saved){
+    // 빠른 재검증
+    fetch('/api/generate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({_auth: saved})
+    }).then(r=>r.json()).then(d=>{
+      if(d._authOk) document.getElementById('lock-screen').style.display = 'none';
+    }).catch(()=>{});
+  }
+});
+
 let songs = [];
+
+function authHeaders(){
+  const pw = sessionStorage.getItem('fancam_auth') || '';
+  return {'Content-Type':'application/json', 'x-app-password': pw};
+}
 let results = {};
 let uploadedB64 = null;
 let uploadedMime = 'image/jpeg';
@@ -317,7 +384,7 @@ async function analyzeImage(){
   btn.innerHTML = '<span class="loading-dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> 분석 중...';
   try{
     const resp = await fetch("/api/generate",{
-      method:"POST", headers:{"Content-Type":"application/json"},
+      method:"POST", headers:authHeaders(),
       body: JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:[
         {type:"image",source:{type:"base64",media_type:uploadedMime,data:uploadedB64}},
         {type:"text",text:"이 이미지는 K-POP 콘서트 플레이리스트 또는 셋리스트입니다. 곡 제목 목록만 순서대로 JSON 배열로 출력하세요. 다른 설명 없이 JSON만 출력하세요. 예: [\"Shut Down\",\"Pink Venom\"]"}
@@ -407,7 +474,7 @@ async function generateOne(song, btn){
 
   try{
     const resp = await fetch("/api/generate",{
-      method:"POST", headers:{"Content-Type":"application/json"},
+      method:"POST", headers:authHeaders(),
       body: JSON.stringify({model:"claude-sonnet-4-20250514", max_tokens:2000, messages:[{role:"user",content:prompt}]})
     });
     const data = await resp.json();
@@ -440,44 +507,46 @@ function renderResultsArea(){
   const done = songs.filter(s=>results[s]);
   if(!done.length){ area.innerHTML=''; return; }
   area.innerHTML = `<hr class="divider"/><div class="section-label">생성 결과</div>` +
-    done.map(s => {
+    done.map((s,i) => {
       const r = results[s]; if(!r) return '';
-      const sid = 's'+Math.random().toString(36).slice(2,8);
-      const descBoth = (r.descKr||'') + '\n\n---\n\n' + (r.descEn||'');
+      const tid='rt'+i, krid='rk'+i, enid='re'+i, hid='rh'+i, bid='rb'+i;
       return `<div style="margin-bottom:1.5rem;">
         <div class="result-song-header">
           <span class="result-song-name">${esc(s)}</span>
-          <button class="btn-sm" onclick="saveOne(${JSON.stringify(s)})">저장하기</button>
+          <button class="btn-sm" onclick="saveByIdx(${i})">저장하기</button>
         </div>
-        ${rb('유튜브 제목', r.title, sid+'t')}
-        ${rbDesc('설명 (한국어 + 영어)', descBoth, r.descKr, r.descEn)}
-        ${rb('해시태그', r.hashtags, sid+'h')}
+        <div class="result-box">
+          <div class="result-label">유튜브 제목</div>
+          <button class="copy-btn" onclick="cpId('${tid}')">복사</button>
+          <div class="result-text" id="${tid}">${esc(r.title)}</div>
+        </div>
+        <div class="result-box">
+          <div class="result-label">설명 (한국어 + 영어)</div>
+          <button class="copy-btn" onclick="cpId('${bid}')">전체복사</button>
+          <div class="lang-label" style="margin-top:2px;">🇰🇷 한국어</div>
+          <div class="result-text" style="margin-bottom:10px;" id="${krid}">${esc(r.descKr)}</div>
+          <div class="lang-label">🇺🇸 English</div>
+          <div class="result-text" id="${enid}">${esc(r.descEn)}</div>
+          <div id="${bid}" style="display:none;">${esc((r.descKr||'')+'\n\n---\n\n'+(r.descEn||''))}</div>
+        </div>
+        <div class="result-box">
+          <div class="result-label">해시태그</div>
+          <button class="copy-btn" onclick="cpId('${hid}')">복사</button>
+          <div class="result-text" id="${hid}">${esc(r.hashtags)}</div>
+        </div>
       </div>`;
     }).join('');
 }
 
-function rb(label, text, id){
-  return `<div class="result-box">
-    <div class="result-label">${label}</div>
-    <button class="copy-btn" onclick="cp('r${id}')">복사</button>
-    <div class="result-text" id="r${id}">${esc(text)}</div>
-  </div>`;
+function cpId(id){
+  const el = document.getElementById(id);
+  if(el) navigator.clipboard.writeText(el.innerText || el.textContent).catch(()=>{});
 }
 
-function rbDesc(label, both, kr, en){
-  const uid = 'desc'+Math.random().toString(36).slice(2,8);
-  return `<div class="result-box">
-    <div class="result-label">${label}</div>
-    <button class="copy-btn" onclick="cpText(${JSON.stringify(both)})">전체복사</button>
-    <div class="lang-label" style="margin-top:2px;">🇰🇷 한국어</div>
-    <div class="result-text" style="margin-bottom:10px;" id="${uid}kr">${esc(kr)}</div>
-    <div class="lang-label">🇺🇸 English</div>
-    <div class="result-text" id="${uid}en">${esc(en)}</div>
-  </div>`;
+function saveByIdx(i){
+  const done = songs.filter(s=>results[s]);
+  if(done[i]) saveOne(done[i]);
 }
-
-function cp(id){ const el=document.getElementById(id); if(el) navigator.clipboard.writeText(el.innerText).catch(()=>{}); }
-function cpText(text){ navigator.clipboard.writeText(text).catch(()=>{}); }
 
 function saveOne(song){
   const r = results[song]; if(!r) return;
@@ -537,10 +606,9 @@ function openDetail(id){
   currentDetailId = id;
   document.getElementById('d-title').textContent = `${e.artist} — ${e.song}`;
   document.getElementById('d-meta').innerHTML = [e.concert,e.venue,e.date].filter(Boolean).map(t=>`<span class="htag">${esc(t)}</span>`).join('');
-  const descBoth = (e.descKr||'') + '\n\n---\n\n' + (e.descEn||'');
   document.getElementById('d-results').innerHTML =
     drb('유튜브 제목', e.title, 'dt') +
-    drbDesc('설명 (한국어 + 영어)', descBoth, e.descKr, e.descEn) +
+    drbDesc('설명 (한국어 + 영어)', e.descKr, e.descEn) +
     drb('해시태그', e.hashtags, 'dh');
   document.getElementById('overlay').style.display = 'flex';
 }
@@ -548,19 +616,21 @@ function openDetail(id){
 function drb(label, text, id){
   return `<div class="result-box">
     <div class="result-label">${label}</div>
-    <button class="copy-btn" onclick="cp('${id}')">복사</button>
+    <button class="copy-btn" onclick="cpId('${id}')">복사</button>
     <div class="result-text" id="${id}">${esc(text)}</div>
   </div>`;
 }
 
-function drbDesc(label, both, kr, en){
+function drbDesc(label, kr, en){
+  const bid = 'db'+Math.random().toString(36).slice(2,8);
   return `<div class="result-box">
     <div class="result-label">${label}</div>
-    <button class="copy-btn" onclick="cpText(${JSON.stringify(both)})">전체복사</button>
+    <button class="copy-btn" onclick="cpId('${bid}')">전체복사</button>
     <div class="lang-label" style="margin-top:2px;">🇰🇷 한국어</div>
     <div class="result-text" style="margin-bottom:10px;">${esc(kr||'')}</div>
     <div class="lang-label">🇺🇸 English</div>
     <div class="result-text">${esc(en||'')}</div>
+    <div id="${bid}" style="display:none;">${esc((kr||'')+'\n\n---\n\n'+(en||''))}</div>
   </div>`;
 }
 
