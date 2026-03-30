@@ -76,7 +76,9 @@
   .song-input-row input { flex: 1; }
   .song-input-row button { white-space: nowrap; padding: 0 16px; height: 38px; font-size: 13px; cursor: pointer; background: var(--text); color: var(--bg); border: none; border-radius: var(--radius); font-family: inherit; }
   .song-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
-  .song-item { display: flex; align-items: center; gap: 8px; background: var(--bg2); border-radius: var(--radius); padding: 8px 12px; }
+  .song-item { display: flex; align-items: center; gap: 8px; background: var(--bg2); border-radius: var(--radius); padding: 8px 12px; flex-wrap: wrap; }
+  .song-item.editing { background: var(--bg); border: 0.5px solid var(--border2); }
+  .song-edit-input { flex: 1; min-width: 120px; font-size: 14px; padding: 4px 8px; }
   .song-num { font-size: 12px; color: var(--text3); min-width: 18px; }
   .song-name { font-size: 14px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status-badge { font-size: 11px; padding: 2px 8px; border-radius: 99px; white-space: nowrap; }
@@ -85,7 +87,7 @@
   .result-box { background: var(--bg2); border-radius: var(--radius); padding: 1rem; margin-bottom: 8px; position: relative; }
   .result-label { font-size: 11px; font-weight: 500; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
   .result-text { font-size: 13px; color: var(--text); line-height: 1.7; white-space: pre-wrap; word-break: break-word; padding-right: 52px; }
-  .copy-btn { position: absolute; top: 10px; right: 10px; font-size: 11px; padding: 3px 9px; cursor: pointer; background: var(--bg); border: 0.5px solid var(--border2); border-radius: var(--radius); color: var(--text2); font-family: inherit; }
+  .copy-btn { position: absolute; top: 10px; right: 10px; font-size: 11px; padding: 3px 9px; cursor: pointer; background: var(--bg); border: 0.5px solid var(--border2); border-radius: var(--radius); color: var(--text2); font-family: inherit; z-index: 2; user-select: none; }
   .copy-btn:hover { color: var(--text); }
   .lang-label { font-size: 11px; font-weight: 500; color: var(--text2); margin-bottom: 4px; }
   .result-song-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -420,13 +422,49 @@ function renderSongList(){
   if(!songs.length){ wrap.style.display='none'; return; }
   wrap.style.display = 'block';
   document.getElementById('song-list').innerHTML = songs.map((s,i)=>`
-    <div class="song-item">
+    <div class="song-item" id="song-row-${i}">
       <span class="song-num">${i+1}</span>
-      <span class="song-name">${esc(s)}</span>
+      <span class="song-name" id="song-name-${i}">${esc(s)}</span>
       <span class="status-badge ${results[s]?'status-done':'status-pending'}">${results[s]?'완료':'대기'}</span>
       <button class="btn-sm" onclick="generateOne(${JSON.stringify(s)},this)">${results[s]?'재생성':'생성'}</button>
+      <button class="btn-sm" onclick="startEdit(${i})" style="color:var(--text2);">수정</button>
       <button class="btn-sm" onclick="removeSong(${i})" style="color:var(--danger);border-color:var(--danger);">삭제</button>
     </div>`).join('');
+}
+
+function startEdit(i){
+  const row = document.getElementById('song-row-'+i);
+  const nameEl = document.getElementById('song-name-'+i);
+  const current = songs[i];
+  row.classList.add('editing');
+  nameEl.innerHTML = `<input class="song-edit-input" id="edit-input-${i}" type="text" value="${esc(current)}" onkeydown="if(event.key==='Enter')confirmEdit(${i}); if(event.key==='Escape')cancelEdit(${i})" />
+    <button class="btn-sm" onclick="confirmEdit(${i})" style="color:var(--success);border-color:var(--success);">확인</button>
+    <button class="btn-sm" onclick="cancelEdit(${i})">취소</button>`;
+  const input = document.getElementById('edit-input-'+i);
+  input.focus();
+  input.select();
+}
+
+function confirmEdit(i){
+  const input = document.getElementById('edit-input-'+i);
+  if(!input) return;
+  const newName = input.value.trim();
+  if(!newName){ alert('곡 이름을 입력해주세요.'); return; }
+  const oldName = songs[i];
+  // 기존 결과가 있으면 새 이름으로 이동
+  if(results[oldName]){
+    results[newName] = results[oldName];
+    delete results[oldName];
+  }
+  songs[i] = newName;
+  renderSongList();
+  renderResultsArea();
+}
+
+function cancelEdit(i){
+  const row = document.getElementById('song-row-'+i);
+  if(row) row.classList.remove('editing');
+  renderSongList();
 }
 
 async function generateOne(song, btn){
@@ -454,7 +492,7 @@ async function generateOne(song, btn){
 
 [작성 규칙]
 1. 제목: 가수명과 곡명에 대괄호 없이 그대로 표기. 반드시 100자 이내로 작성.
-2. 한국어 설명: 반드시 500자 내외로 작성. 곡명에 따옴표나 대괄호 없이 그대로 표기. 곡의 분위기와 매력, 콘서트 현장감, SEO 키워드(가수명, 곡명, 콘서트명, 공연장, 직캠, fancam 등) 풍부하게 포함. 팬들이 실제로 검색할 단어들 자연스럽게 녹여서 작성. 마지막은 👉 로 마무리.
+2. 한국어 설명: 반드시 800자 내외로 작성. 곡명에 따옴표나 대괄호 없이 그대로 표기. 곡의 분위기와 매력, 콘서트 현장감, SEO 키워드(가수명, 곡명, 콘서트명, 공연장, 직캠, fancam 등) 풍부하게 포함. 팬들이 실제로 검색할 단어들 자연스럽게 녹여서 작성. 마지막은 👉 로 마무리.
 3. 영어 설명: 한국어 설명 전체를 자연스러운 영어로 번역. 동일한 내용과 분량 유지.
 4. 해시태그: 팬 유입 최적화, 영어/한국어 혼합 20개.
 
@@ -464,7 +502,7 @@ async function generateOne(song, btn){
 [4K]${artist} - ${song} (Fancam│${ds} ${venue} ${concert})
 
 ===DESC_KR===
-[500자 내외 한국어 설명 작성]
+[800자 내외 한국어 설명 작성]
 
 ===DESC_EN===
 [한국어 설명 전체를 영어로 번역]
@@ -540,7 +578,28 @@ function renderResultsArea(){
 
 function cpId(id){
   const el = document.getElementById(id);
-  if(el) navigator.clipboard.writeText(el.innerText || el.textContent).catch(()=>{});
+  if(!el) return;
+  // For hidden elements (display:none), use textContent and unescape HTML
+  const isHidden = el.style.display === 'none';
+  let text;
+  if(isHidden){
+    const tmp = document.createElement('div');
+    tmp.innerHTML = el.innerHTML;
+    text = tmp.innerText || tmp.textContent;
+  } else {
+    text = el.innerText || el.textContent;
+  }
+  navigator.clipboard.writeText(text).then(()=>{
+    // brief visual feedback
+    const btns = document.querySelectorAll('.copy-btn');
+    btns.forEach(b => {
+      if(b.getAttribute('onclick') && b.getAttribute('onclick').includes(id)){
+        const orig = b.textContent;
+        b.textContent = '완료!';
+        setTimeout(()=>{ b.textContent = orig; }, 1200);
+      }
+    });
+  }).catch(()=>{ alert('복사 실패. 텍스트를 직접 선택해주세요.'); });
 }
 
 function saveByIdx(i){
