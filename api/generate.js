@@ -8,6 +8,10 @@ export default async function handler(req, res) {
 
   const appPassword = process.env.APP_PASSWORD;
   const apiKey = process.env.ANTHROPIC_API_KEY;
+  const modelAliases = {
+    'claude-sonnet-4-20250514': 'claude-sonnet-4-6',
+    'claude-opus-4-20250514': 'claude-opus-4-8',
+  };
 
   // 비밀번호 확인 전용 요청
   if (req.body && req.body._auth !== undefined) {
@@ -32,7 +36,10 @@ export default async function handler(req, res) {
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
       },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify({
+        ...req.body,
+        model: modelAliases[req.body?.model] || req.body?.model,
+      }),
     });
     const data = await response.json();
     return res.status(response.status).json(data);

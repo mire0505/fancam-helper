@@ -389,6 +389,7 @@ function authHeaders(){
   const pw = sessionStorage.getItem('fancam_auth') || '';
   return {'Content-Type':'application/json', 'x-app-password': pw};
 }
+const CLAUDE_MODEL = 'claude-sonnet-4-6';
 let results = {};
 let songMemos = {};
 let uploadedB64 = null;
@@ -399,6 +400,26 @@ let currentDetailId = null;
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 const DB_KEY = 'fancam_db';
 const SESSION_KEY = 'fancam_active_session';
+
+function getApiErrorMessage(data, status){
+  const raw = data?.error?.message || data?.error || data?.message || '';
+  const msg = typeof raw === 'string' ? raw : JSON.stringify(raw);
+  const lower = msg.toLowerCase();
+
+  if(status === 401) return '앱 비밀번호가 맞지 않거나 세션이 만료됐습니다. 새로고침 후 다시 로그인해주세요.';
+  if(status === 429 || lower.includes('rate limit')) return 'AI 요청 한도에 걸렸습니다. 잠시 후 다시 시도해주세요.';
+  if(lower.includes('credit') || lower.includes('balance') || lower.includes('billing')) return 'Anthropic API 크레딧/결제 한도가 부족합니다. Claude Console에서 크레딧 또는 결제 상태를 확인해주세요.';
+  if(lower.includes('not_found') || lower.includes('model') || lower.includes('retired')) return 'AI 모델이 더 이상 지원되지 않습니다. 앱을 새로고침한 뒤 다시 시도해주세요.';
+  if(msg) return `AI 요청 실패: ${msg}`;
+  return `AI 요청 실패: HTTP ${status}`;
+}
+
+async function readClaudeResponse(resp){
+  const data = await resp.json().catch(() => ({}));
+  if(!resp.ok || data.error) throw new Error(getApiErrorMessage(data, resp.status));
+  if(!Array.isArray(data.content)) throw new Error('AI 응답 형식이 예상과 다릅니다. 잠시 후 다시 시도해주세요.');
+  return data;
+}
 
 function getDB(){
   try{
@@ -599,17 +620,17 @@ async function analyzeImage(){
   try{
     const resp = await fetch("/api/generate",{
       method:"POST", headers:authHeaders(),
-      body: JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:[
+      body: JSON.stringify({model:CLAUDE_MODEL,max_tokens:1000,messages:[{role:"user",content:[
         {type:"image",source:{type:"base64",media_type:uploadedMime,data:uploadedB64}},
         {type:"text",text:"이 이미지는 K-POP 콘서트 플레이리스트 또는 셋리스트입니다. 곡 제목 목록만 순서대로 JSON 배열로 출력하세요. 다른 설명 없이 JSON만 출력하세요. 예: [\"Shut Down\",\"Pink Venom\"]"}
       ]}]})
     });
-    const data = await resp.json();
+    const data = await readClaudeResponse(resp);
     const text = data.content.map(i=>i.text||'').join('').replace(/```json|```/g,'').trim();
     const list = JSON.parse(text);
     if(Array.isArray(list)&&list.length){ list.forEach(s=>{ if(s&&!songs.includes(s)) songs.push(s); }); renderSongList(); }
     else alert('곡 목록을 찾지 못했어요. 이미지가 선명한지 확인해주세요.');
-  }catch(er){ alert('분석 실패. 이미지가 선명한지 확인해주세요.'); }
+  }catch(er){ alert(er.message || '분석 실패. 이미지가 선명한지 확인해주세요.'); }
   btn.disabled = false;
   btn.textContent = '이미지 분석 → 곡 목록 자동 추출';
 }
@@ -781,9 +802,9 @@ ${titleStr}
   try{
     const resp = await fetch("/api/generate",{
       method:"POST", headers:authHeaders(),
-      body: JSON.stringify({model:"claude-sonnet-4-20250514", max_tokens:2000, messages:[{role:"user",content:prompt}]})
+      body: JSON.stringify({model:CLAUDE_MODEL, max_tokens:2000, messages:[{role:"user",content:prompt}]})
     });
-    const data = await resp.json();
+    const data = await readClaudeResponse(resp);
     const text = data.content.map(i=>i.text||'').join('');
     const parse = (tag,next) => {
       const s = text.indexOf(`===${tag}===`);
@@ -799,7 +820,7 @@ ${titleStr}
       descEn:   hasEn ? parse('DESC_EN','HASHTAGS') : '',
       hashtags: parse('HASHTAGS',null)
     };
-  }catch(er){ results[song]=null; alert(`"${song}" 생성 실패. 다시 시도해주세요.`); }
+  }catch(er){ results[song]=null; alert(`"${song}" 생성 실패: ${er.message || '다시 시도해주세요.'}`); }
   if(btn){ btn.disabled=false; btn.textContent='재생성'; }
   renderSongList(); renderResultsArea();
 }
@@ -1068,13 +1089,13 @@ async function searchConcert(){
       method: 'POST',
       headers: {...authHeaders()},
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: CLAUDE_MODEL,
         max_tokens: 800,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         messages: [{ role: 'user', content: prompt }]
       })
     });
-    const data = await resp.json();
+    const data = await readClaudeResponse(resp);
 
     // content 블록에서 텍스트만 추출
     const text = (data.content || [])
@@ -1096,7 +1117,7 @@ async function searchConcert(){
           <div class="suggestion-meta">${esc(c.period||'')}${c.venues ? ' · '+esc(c.venues) : ''}</div>
         </div>`).join('');
   } catch(e){
-    box.innerHTML = `<div class="suggestion-loading" style="color:var(--danger);">검색 결과를 찾지 못했어요. 직접 입력해 주세요.</div>`;
+    box.innerHTML = `<div class="suggestion-loading" style="color:var(--danger);">${esc(e.message || '검색 결과를 찾지 못했어요. 직접 입력해 주세요.')}</div>`;
   }
   btn.disabled = false;
   btn.textContent = '🔍 검색';
