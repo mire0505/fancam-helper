@@ -47,6 +47,16 @@
   input:focus, textarea:focus, select:focus { border-color: var(--text2); }
   textarea { resize: vertical; line-height: 1.6; }
   select { cursor: pointer; }
+  .fanclub-row { display: flex; gap: 6px; align-items: center; }
+  .fanclub-row input { flex: 1; min-width: 0; }
+  .fanclub-format { flex: 0 0 86px; width: 86px; padding-left: 8px; padding-right: 8px; }
+  .fanclub-search-btn { flex: 0 0 auto; height: 38px; padding: 0 12px; white-space: nowrap; }
+  @media (max-width: 560px) {
+    .fanclub-row { flex-wrap: wrap; }
+    .fanclub-row input { flex-basis: 100%; }
+    .fanclub-format { flex: 1 1 0; width: auto; }
+    .fanclub-search-btn { flex: 1 1 auto; }
+  }
   .venue-wrap { display: flex; flex-direction: column; gap: 6px; }
   .venue-custom { display: none; }
   .venue-custom.show { display: block; }
@@ -159,8 +169,20 @@
       <div id="session-edit">
         <div class="session-title">콘서트 정보 (한 번만 입력)</div>
         <div class="form-grid">
-          <div><label>가수 이름 *</label><input type="text" id="artist" placeholder="예: 르세라핌 / LE SSERAFIM" /></div>
-          <div><label>팬클럽 이름</label><input type="text" id="fanclub" placeholder="예: FEARNOT" /></div>
+          <div><label>가수 이름 *</label><input type="text" id="artist" placeholder="예: 르세라핌 / LE SSERAFIM" oninput="clearFanclubSuggestions()" onkeydown="if(event.key==='Enter')searchFanclub()" /></div>
+          <div>
+            <label>팬클럽 이름</label>
+            <div class="fanclub-row">
+              <input type="text" id="fanclub" placeholder="예: FEARNOT" />
+              <select id="fanclub-format" class="fanclub-format" title="팬클럽명 표기 방식" onchange="rerenderFanclubSuggestions()">
+                <option value="both" selected>한+영</option>
+                <option value="ko">한국어</option>
+                <option value="en">English</option>
+              </select>
+              <button type="button" class="btn-outline fanclub-search-btn" id="search-fanclub-btn" onclick="searchFanclub()">추천</button>
+            </div>
+            <div id="fanclub-suggestions" style="display:none;margin-top:6px;"></div>
+          </div>
         </div>
         <div class="form-row">
           <label>콘서트 이름 *</label>
@@ -421,6 +443,17 @@ async function readClaudeResponse(resp){
   return data;
 }
 
+function extractJsonArray(text){
+  const clean = (text || '').replace(/```json|```/g, '').trim();
+  try{ return JSON.parse(clean); }
+  catch(e){
+    const start = clean.indexOf('[');
+    const end = clean.lastIndexOf(']');
+    if(start !== -1 && end > start) return JSON.parse(clean.slice(start, end + 1));
+    throw e;
+  }
+}
+
 function getDB(){
   try{
     // 고정 키에서 불러오기
@@ -479,10 +512,15 @@ function getVenue(){
   return sel;
 }
 
+function getFanclubFormat(){
+  return document.getElementById('fanclub-format')?.value || 'both';
+}
+
 function collectSessionData(){
   return {
     artist: document.getElementById('artist').value.trim(),
     fanclub: document.getElementById('fanclub').value.trim(),
+    fanclubFormat: getFanclubFormat(),
     concert: document.getElementById('concert').value.trim(),
     venueSelect: document.getElementById('venue-select').value,
     venueCustom: document.getElementById('venue-custom').value.trim(),
@@ -496,6 +534,7 @@ function collectSessionData(){
 function applySessionData(data){
   document.getElementById('artist').value = data.artist || '';
   document.getElementById('fanclub').value = data.fanclub || '';
+  document.getElementById('fanclub-format').value = data.fanclubFormat || 'both';
   document.getElementById('concert').value = data.concert || '';
   document.getElementById('date').value = data.date || '';
   document.getElementById('zone').value = data.zone || '';
@@ -563,6 +602,8 @@ function clearActiveSession(){
     const el = document.getElementById(id);
     if(el) el.value = '';
   });
+  document.getElementById('fanclub-format').value = 'both';
+  clearFanclubSuggestions();
   document.getElementById('venue-select').value = '';
   handleVenueSelect(false);
   songs = [];
@@ -1051,6 +1092,118 @@ function deleteEntry(){
   closeDetail(); buildFilters(); renderHistory();
 }
 
+function normalizeFanclubSuggestion(item){
+  return {
+    nameKo: String(item?.nameKo || item?.ko || item?.korean || '').trim(),
+    nameEn: String(item?.nameEn || item?.en || item?.english || item?.name || '').trim(),
+    note: String(item?.note || item?.source || item?.description || '').trim()
+  };
+}
+
+function getFanclubDisplay(item, format=getFanclubFormat()){
+  const ko = (item?.nameKo || '').trim();
+  const en = (item?.nameEn || '').trim();
+  if(format === 'ko') return ko || en;
+  if(format === 'en') return en || ko;
+  if(ko && en && ko.toLowerCase() !== en.toLowerCase()) return `${ko} / ${en}`;
+  return ko || en;
+}
+
+function clearFanclubSuggestions(){
+  window._fanclubList = [];
+  const box = document.getElementById('fanclub-suggestions');
+  if(box){ box.style.display = 'none'; box.innerHTML = ''; }
+}
+
+function renderFanclubSuggestions(list){
+  const box = document.getElementById('fanclub-suggestions');
+  const normalized = list.map(normalizeFanclubSuggestion).filter(c => c.nameKo || c.nameEn);
+  window._fanclubList = normalized;
+  box.style.display = 'block';
+
+  if(!normalized.length){
+    box.innerHTML = '<div class="suggestion-loading" style="color:var(--danger);">공식 팬클럽명을 찾지 못했어요. 직접 입력해 주세요.</div>';
+    return;
+  }
+
+  const modeName = ({both:'한글+영어', ko:'한국어', en:'영어'}[getFanclubFormat()] || '한글+영어');
+  box.innerHTML = `<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">${modeName} 표기로 입력됩니다. 원하는 항목을 클릭하세요.</div>` +
+    normalized.map((c,i) => {
+      const display = getFanclubDisplay(c);
+      const meta = [c.nameKo && c.nameEn ? `${c.nameKo} · ${c.nameEn}` : '', c.note].filter(Boolean).join(' · ');
+      return `
+        <div class="suggestion-item" onclick="selectFanclub(${i})">
+          <div class="suggestion-name">${esc(display)}</div>
+          <div class="suggestion-meta">${esc(meta || '공식 팬덤명 후보')}</div>
+        </div>`;
+    }).join('');
+}
+
+function rerenderFanclubSuggestions(){
+  if(window._fanclubList && window._fanclubList.length) renderFanclubSuggestions(window._fanclubList);
+}
+
+async function searchFanclub(){
+  const artist = document.getElementById('artist').value.trim();
+  if(!artist){ alert('먼저 가수 이름을 입력해주세요.'); return; }
+
+  const btn = document.getElementById('search-fanclub-btn');
+  const box = document.getElementById('fanclub-suggestions');
+  btn.disabled = true;
+  btn.textContent = '추천 중...';
+  box.style.display = 'block';
+  box.innerHTML = '<div class="suggestion-loading"><span class="loading-dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> 공식 팬클럽명을 찾고 있어요...</div>';
+
+  const prompt = `당신은 K-POP 아티스트와 공식 팬덤명 정보를 확인하는 전문가입니다.
+웹 검색으로 아래 아티스트의 공식 팬클럽명 또는 공식 팬덤명을 찾아주세요.
+
+- 아티스트: ${artist}
+
+다음 형식의 JSON 배열만 출력하세요. 다른 설명 없이 JSON만 출력하세요.
+[
+  {
+    "nameKo": "공식 한국어 팬덤명 또는 한국어 표기",
+    "nameEn": "공식 영어 팬덤명",
+    "note": "공식 팬덤명인지 확인한 짧은 근거"
+  }
+]
+공식 팬덤명이 확실한 후보만 최대 3개까지 포함하세요. 공식 팬덤명을 찾지 못하면 []를 출력하세요.`;
+
+  try{
+    const resp = await fetch('/api/generate', {
+      method: 'POST',
+      headers: {...authHeaders()},
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 700,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const data = await readClaudeResponse(resp);
+    const text = (data.content || [])
+      .filter(b => b.type === 'text')
+      .map(b => b.text || '')
+      .join('');
+    const list = extractJsonArray(text);
+    if(!Array.isArray(list) || !list.length) throw new Error('공식 팬클럽명을 찾지 못했어요. 직접 입력해 주세요.');
+    renderFanclubSuggestions(list);
+  } catch(e){
+    box.innerHTML = `<div class="suggestion-loading" style="color:var(--danger);">${esc(e.message || '추천 결과를 찾지 못했어요. 직접 입력해 주세요.')}</div>`;
+  }
+
+  btn.disabled = false;
+  btn.textContent = '추천';
+}
+
+function selectFanclub(i){
+  const item = (window._fanclubList || [])[i];
+  const value = getFanclubDisplay(item);
+  if(!value) return;
+  document.getElementById('fanclub').value = value;
+  document.getElementById('fanclub-suggestions').style.display = 'none';
+}
+
 async function searchConcert(){
   const artist = document.getElementById('artist').value.trim();
   const date = document.getElementById('date').value;
@@ -1103,8 +1256,7 @@ async function searchConcert(){
       .map(b => b.text || '')
       .join('');
 
-    const clean = text.replace(/```json|```/g, '').trim();
-    const list = JSON.parse(clean);
+    const list = extractJsonArray(text);
 
     if(!Array.isArray(list) || !list.length) throw new Error('no results');
 
