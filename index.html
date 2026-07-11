@@ -127,6 +127,28 @@
   .suggestion-name { font-size: 14px; font-weight: 500; margin-bottom: 3px; }
   .suggestion-meta { font-size: 12px; color: var(--text2); }
   .suggestion-loading { font-size: 13px; color: var(--text2); padding: 10px 0; text-align: center; }
+  .setlist-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 92px auto; gap: 8px; margin-bottom: 10px; }
+  .setlist-toolbar button { white-space: nowrap; }
+  .setlist-results { margin-top: 10px; }
+  .setlist-results-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  .setlist-count { font-size: 12px; color: var(--text2); }
+  .setlist-suggestions { display: flex; flex-direction: column; gap: 6px; }
+  .setlist-suggestion { display: flex; align-items: center; gap: 10px; background: var(--bg2); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 9px 10px; }
+  .setlist-rank { flex: 0 0 22px; font-size: 12px; color: var(--text3); text-align: center; }
+  .setlist-song-info { flex: 1; min-width: 0; }
+  .setlist-song-title { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .setlist-song-reason { font-size: 11px; color: var(--text2); margin-top: 3px; line-height: 1.4; }
+  .setlist-confidence { flex: 0 0 auto; font-size: 11px; padding: 2px 7px; border-radius: 99px; background: var(--bg); color: var(--text2); border: 0.5px solid var(--border); }
+  .setlist-confidence.high { background: var(--success-bg); color: var(--success); border-color: transparent; }
+  .setlist-add-btn { flex: 0 0 auto; min-width: 52px; }
+  @media (max-width: 560px) {
+    .setlist-toolbar { grid-template-columns: minmax(0, 1fr) 88px; }
+    .setlist-toolbar button { grid-column: 1 / -1; width: 100%; }
+    .setlist-suggestion { align-items: flex-start; flex-wrap: wrap; }
+    .setlist-song-info { flex-basis: calc(100% - 42px); }
+    .setlist-confidence { margin-left: 32px; }
+    .setlist-add-btn { margin-left: auto; }
+  }
   .lock-screen { position: fixed; inset: 0; background: var(--bg3); display: flex; align-items: center; justify-content: center; z-index: 999; padding: 20px; }
   .lock-card { background: var(--bg); border-radius: var(--radius-lg); border: 0.5px solid var(--border); padding: 2rem 1.5rem; max-width: 340px; width: 100%; text-align: center; }
   .lock-icon { font-size: 36px; margin-bottom: 12px; }
@@ -236,6 +258,25 @@
           </div>
           <div class="session-tags" id="session-tags"></div>
         </div>
+
+        <hr class="divider" />
+
+        <div class="section-label">AI 예상 셋리스트</div>
+        <div class="setlist-toolbar">
+          <select id="setlist-mode" aria-label="예상 셋리스트 추천 방식" onchange="persistWorkState()">
+            <option value="recent" selected>최근 공연 기반</option>
+            <option value="balanced">공연곡·대표곡 균형</option>
+            <option value="title">타이틀곡 중심</option>
+          </select>
+          <select id="setlist-count" aria-label="예상곡 수" onchange="persistWorkState()">
+            <option value="10">10곡</option>
+            <option value="15" selected>15곡</option>
+            <option value="20">20곡</option>
+            <option value="25">25곡</option>
+          </select>
+          <button class="btn-outline" id="predict-setlist-btn" onclick="predictSetlist()">예상곡 찾기</button>
+        </div>
+        <div id="setlist-results" class="setlist-results" style="display:none;"></div>
 
         <hr class="divider" />
 
@@ -414,6 +455,7 @@ function authHeaders(){
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 let results = {};
 let songMemos = {};
+let predictedSetlist = [];
 let uploadedB64 = null;
 let uploadedMime = 'image/jpeg';
 let activeFilter = 'all';
@@ -527,7 +569,12 @@ function collectSessionData(){
     venue: getVenue(),
     date: document.getElementById('date').value,
     zone: document.getElementById('zone').value.trim(),
-    concertMemo: document.getElementById('concert-memo').value.trim()
+    concertMemo: document.getElementById('concert-memo').value.trim(),
+    songs: [...songs],
+    songMemos: {...songMemos},
+    setlistSuggestions: [...predictedSetlist],
+    setlistMode: document.getElementById('setlist-mode')?.value || 'recent',
+    setlistCount: document.getElementById('setlist-count')?.value || '15'
   };
 }
 
@@ -539,6 +586,11 @@ function applySessionData(data){
   document.getElementById('date').value = data.date || '';
   document.getElementById('zone').value = data.zone || '';
   document.getElementById('concert-memo').value = data.concertMemo || '';
+  songs = Array.isArray(data.songs) ? data.songs.filter(Boolean) : [];
+  songMemos = data.songMemos && typeof data.songMemos === 'object' ? data.songMemos : {};
+  predictedSetlist = Array.isArray(data.setlistSuggestions) ? data.setlistSuggestions.map(normalizePredictedSong).filter(s => s.title) : [];
+  document.getElementById('setlist-mode').value = data.setlistMode || 'recent';
+  document.getElementById('setlist-count').value = data.setlistCount || '15';
 
   const venueSelect = data.venueSelect || data.venue || '';
   const venueEl = document.getElementById('venue-select');
@@ -561,12 +613,18 @@ function persistActiveSession(data=collectSessionData()){
   localStorage.setItem(SESSION_KEY, JSON.stringify({...data, savedAt: Date.now()}));
 }
 
+function persistWorkState(){
+  if(localStorage.getItem(SESSION_KEY)) persistActiveSession();
+}
+
 function restoreActiveSession(){
   try{
     const data = JSON.parse(localStorage.getItem(SESSION_KEY)||'null');
     if(!data || !data.artist || !data.concert || !data.venue || !data.date) return;
     applySessionData(data);
     renderSessionSummary(data);
+    renderSongList();
+    renderPredictedSetlist();
     document.getElementById('session-edit').style.display = 'none';
     document.getElementById('session-view').style.display = 'block';
   }catch(e){}
@@ -609,10 +667,15 @@ function clearActiveSession(){
   songs = [];
   results = {};
   songMemos = {};
+  predictedSetlist = [];
   uploadedB64 = null;
   document.getElementById('img-preview').innerHTML = '';
   document.getElementById('analyze-btn').disabled = true;
   document.getElementById('song-list-wrap').style.display = 'none';
+  document.getElementById('setlist-mode').value = 'recent';
+  document.getElementById('setlist-count').value = '15';
+  document.getElementById('setlist-results').style.display = 'none';
+  document.getElementById('setlist-results').innerHTML = '';
   document.getElementById('results-area').innerHTML = '';
   document.getElementById('session-edit').style.display = 'block';
   document.getElementById('session-view').style.display = 'none';
@@ -669,31 +732,181 @@ async function analyzeImage(){
     const data = await readClaudeResponse(resp);
     const text = data.content.map(i=>i.text||'').join('').replace(/```json|```/g,'').trim();
     const list = JSON.parse(text);
-    if(Array.isArray(list)&&list.length){ list.forEach(s=>{ if(s&&!songs.includes(s)) songs.push(s); }); renderSongList(); }
+    if(Array.isArray(list)&&list.length){ list.forEach(s=>addSongTitle(s)); renderSongList(); persistWorkState(); }
     else alert('곡 목록을 찾지 못했어요. 이미지가 선명한지 확인해주세요.');
   }catch(er){ alert(er.message || '분석 실패. 이미지가 선명한지 확인해주세요.'); }
   btn.disabled = false;
   btn.textContent = '이미지 분석 → 곡 목록 자동 추출';
 }
 
+function normalizePredictedSong(item){
+  const rawConfidence = String(item?.confidence || item?.probability || '').trim().toLowerCase();
+  let confidence = '중간';
+  if(rawConfidence.includes('높') || rawConfidence === 'high') confidence = '높음';
+  if(rawConfidence.includes('낮') || rawConfidence === 'low') confidence = '낮음';
+  return {
+    title: String(item?.title || item?.song || item?.name || '').trim(),
+    confidence,
+    basis: String(item?.basis || item?.sourceType || '').trim(),
+    reason: String(item?.reason || item?.note || '').trim()
+  };
+}
+
+function hasSong(title){
+  const key = String(title || '').trim().toLowerCase();
+  return songs.some(song => song.trim().toLowerCase() === key);
+}
+
+function addSongTitle(title){
+  const clean = String(title || '').trim();
+  if(!clean || hasSong(clean)) return false;
+  songs.push(clean);
+  return true;
+}
+
+function renderPredictedSetlist(){
+  const box = document.getElementById('setlist-results');
+  if(!box) return;
+  predictedSetlist = predictedSetlist.map(normalizePredictedSong).filter(s => s.title);
+  if(!predictedSetlist.length){ box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  const addedCount = predictedSetlist.filter(s => hasSong(s.title)).length;
+  box.style.display = 'block';
+  box.innerHTML = `
+    <div class="setlist-results-header">
+      <span class="setlist-count">예상곡 ${predictedSetlist.length}곡 · ${addedCount}곡 추가됨</span>
+      <button class="btn-sm" onclick="addAllPredictedSongs()" ${addedCount === predictedSetlist.length ? 'disabled' : ''}>모두 추가</button>
+    </div>
+    <div class="setlist-suggestions">${predictedSetlist.map((song, i) => {
+      const added = hasSong(song.title);
+      const reason = [song.basis, song.reason].filter(Boolean).join(' · ');
+      return `<div class="setlist-suggestion">
+        <span class="setlist-rank">${i + 1}</span>
+        <div class="setlist-song-info">
+          <div class="setlist-song-title">${esc(song.title)}</div>
+          <div class="setlist-song-reason">${esc(reason || '공연 이력과 대표곡을 바탕으로 추천')}</div>
+        </div>
+        <span class="setlist-confidence ${song.confidence === '높음' ? 'high' : ''}">${esc(song.confidence)}</span>
+        <button class="btn-sm setlist-add-btn" onclick="addPredictedSong(${i})" ${added ? 'disabled' : ''}>${added ? '추가됨' : '+ 추가'}</button>
+      </div>`;
+    }).join('')}</div>`;
+}
+
+async function predictSetlist(){
+  const artist = document.getElementById('artist').value.trim();
+  const concert = document.getElementById('concert').value.trim();
+  const venue = getVenue();
+  const date = document.getElementById('date').value;
+  const mode = document.getElementById('setlist-mode').value;
+  const count = Number(document.getElementById('setlist-count').value) || 15;
+  if(!artist || !concert){ alert('먼저 가수와 콘서트 정보를 저장해주세요.'); return; }
+
+  const modeRules = {
+    recent: '동일 투어의 이전 공연과 가장 최근 콘서트 셋리스트를 최우선으로 분석하세요.',
+    balanced: '최근 콘서트에서 자주 한 곡과 대표 타이틀곡을 균형 있게 섞으세요.',
+    title: '공식 타이틀곡과 대표 활동곡을 우선하되 최근 공연에서 실제로 한 곡에 가중치를 주세요.'
+  };
+  const btn = document.getElementById('predict-setlist-btn');
+  const box = document.getElementById('setlist-results');
+  btn.disabled = true;
+  btn.textContent = '검색 중...';
+  box.style.display = 'block';
+  box.innerHTML = '<div class="suggestion-loading"><span class="loading-dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> 과거 공연과 대표곡을 찾고 있어요...</div>';
+
+  const prompt = `당신은 K-POP 콘서트 셋리스트 리서처입니다. 웹 검색으로 아래 공연에서 나올 가능성이 높은 곡을 예상하세요.
+
+[공연 정보]
+- 가수: ${artist}
+- 콘서트: ${concert}
+- 공연일: ${date || '미정'}
+- 공연장: ${venue || '미정'}
+
+[추천 방식]
+${modeRules[mode] || modeRules.recent}
+
+[조사 우선순위]
+1. 같은 투어에서 이미 열린 다른 도시·회차의 실제 셋리스트
+2. 직전 투어와 최근 단독 콘서트에서 반복된 곡
+3. 공식 타이틀곡, 대표 활동곡, 최근 발매곡
+
+정확한 공식 표기의 곡명만 사용하고 다른 가수의 곡, 커버곡 추측, 중복 곡은 제외하세요. 공연 전에 예측하는 것이므로 확인되지 않은 셋리스트를 확정적으로 표현하지 마세요. 가능성이 높은 순서로 최대 ${count}곡을 추천하세요.
+
+아래 JSON 배열만 출력하세요. 다른 설명은 출력하지 마세요.
+[
+  {
+    "title": "공식 곡명",
+    "confidence": "높음 또는 중간 또는 낮음",
+    "basis": "동일 투어 또는 최근 공연 또는 대표곡 또는 타이틀곡",
+    "reason": "추천 근거를 한국어 35자 이내로"
+  }
+]`;
+
+  try{
+    const resp = await fetch('/api/generate', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 1800,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const data = await readClaudeResponse(resp);
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text || '').join('');
+    const list = extractJsonArray(text);
+    predictedSetlist = Array.isArray(list) ? list.map(normalizePredictedSong).filter(s => s.title).slice(0, count) : [];
+    if(!predictedSetlist.length) throw new Error('예상곡을 찾지 못했어요. 추천 방식을 바꿔 다시 시도해주세요.');
+    renderPredictedSetlist();
+    persistWorkState();
+  } catch(e){
+    predictedSetlist = [];
+    box.innerHTML = `<div class="suggestion-loading" style="color:var(--danger);">${esc(e.message || '예상 셋리스트를 만들지 못했어요. 잠시 후 다시 시도해주세요.')}</div>`;
+  }
+
+  btn.disabled = false;
+  btn.textContent = '예상곡 다시 찾기';
+}
+
+function addPredictedSong(i){
+  const song = predictedSetlist[i];
+  if(!song || !addSongTitle(song.title)) return;
+  renderSongList();
+  persistWorkState();
+}
+
+function addAllPredictedSongs(){
+  let added = 0;
+  predictedSetlist.forEach(song => { if(addSongTitle(song.title)) added++; });
+  renderSongList();
+  persistWorkState();
+  if(!added) alert('예상곡이 모두 곡 목록에 추가되어 있습니다.');
+}
+
 function addSong(){
   const inp = document.getElementById('manual-song');
   const val = inp.value.trim(); if(!val) return;
-  if(!songs.includes(val)) songs.push(val);
-  inp.value = ''; renderSongList();
+  addSongTitle(val);
+  inp.value = ''; renderSongList(); persistWorkState();
 }
 
-function removeSong(i){ songs.splice(i,1); renderSongList(); }
+function removeSong(i){
+  const song = songs[i];
+  songs.splice(i,1);
+  if(song){ delete results[song]; delete songMemos[song]; }
+  renderSongList(); renderResultsArea(); persistWorkState();
+}
 
 function clearSongs(){
   if(!confirm('목록을 초기화하시겠습니까?')) return;
   songs = []; results = {}; songMemos = {}; renderSongList();
   document.getElementById('results-area').innerHTML = '';
+  persistWorkState();
 }
 
 function renderSongList(){
   const wrap = document.getElementById('song-list-wrap');
-  if(!songs.length){ wrap.style.display='none'; return; }
+  if(!songs.length){ wrap.style.display='none'; renderPredictedSetlist(); return; }
   wrap.style.display = 'block';
   document.getElementById('song-list').innerHTML = songs.map((s,i)=>{
     const hasMemo = songMemos[s] !== undefined;
@@ -719,6 +932,7 @@ function renderSongList(){
       </div>
     </div>`;
   }).join('');
+  renderPredictedSetlist();
 }
 
 function startEdit(i){
@@ -748,6 +962,7 @@ function confirmEdit(i){
   songs[i] = newName;
   renderSongList();
   renderResultsArea();
+  persistWorkState();
 }
 
 function cancelEdit(i){
@@ -776,6 +991,7 @@ function saveSongMemo(i, val){
   const s = songs[i];
   if(val.trim()) songMemos[s] = val;
   else delete songMemos[s];
+  persistWorkState();
 }
 
 async function generateOne(song, btn){
