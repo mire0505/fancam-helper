@@ -496,6 +496,10 @@ function extractJsonArray(text){
   }
 }
 
+function sanitizeYouTubeText(text){
+  return String(text || '').replace(/[<>]/g, '');
+}
+
 function getDB(){
   try{
     // 고정 키에서 불러오기
@@ -1044,6 +1048,7 @@ ${songMemo ? '- 이 곡 특이사항: '+songMemo : ''}
    - 콘서트 메모와 곡 메모는 반영하되, 없는 좌석/회차/멤버 정보는 새로 만들지 않음.
    - 마지막 CTA는 "${outroText}"를 바탕으로 곡 분위기에 맞게 자연스럽게 다듬어 작성.
 ${enRule}4. 해시태그: ${buildHashtagInstruction()}
+5. 유튜브에서 사용할 수 없는 왼쪽·오른쪽 꺾쇠 특수기호는 제목, 설명, 해시태그 어디에도 사용하지 않음.
 
 아래 형식 그대로 출력. 섹션 구분자 반드시 유지.
 
@@ -1072,10 +1077,10 @@ ${titleStr}
     const hasEn = cfg2.includeEn === 'yes';
     const parsedTitle = parse('TITLE','DESC_KR') || titleStr;
     results[song] = {
-      title:    enforceTitleLimit(parsedTitle, artist, song, ds, venue, concert),
-      descKr:   hasEn ? parse('DESC_KR','DESC_EN') : parse('DESC_KR','HASHTAGS'),
-      descEn:   hasEn ? parse('DESC_EN','HASHTAGS') : '',
-      hashtags: parse('HASHTAGS',null)
+      title:    sanitizeYouTubeText(enforceTitleLimit(parsedTitle, artist, song, ds, venue, concert)),
+      descKr:   sanitizeYouTubeText(hasEn ? parse('DESC_KR','DESC_EN') : parse('DESC_KR','HASHTAGS')),
+      descEn:   sanitizeYouTubeText(hasEn ? parse('DESC_EN','HASHTAGS') : ''),
+      hashtags: sanitizeYouTubeText(parse('HASHTAGS',null))
     };
   }catch(er){ results[song]=null; alert(`"${song}" 생성 실패: ${er.message || '다시 시도해주세요.'}`); }
   if(btn){ btn.disabled=false; btn.textContent='재생성'; }
@@ -1090,7 +1095,7 @@ async function generateAll(){
 }
 
 function buildFullDescription(r){
-  return [r.descKr, r.descEn, r.hashtags].filter(Boolean).join('\n\n');
+  return sanitizeYouTubeText([r.descKr, r.descEn, r.hashtags].filter(Boolean).join('\n\n'));
 }
 
 function renderResultsArea(){
@@ -1281,6 +1286,9 @@ function drb(label, text, id){
 }
 
 function drbDesc(label, kr, en, hashtags){
+  kr = sanitizeYouTubeText(kr);
+  en = sanitizeYouTubeText(en);
+  hashtags = sanitizeYouTubeText(hashtags);
   const bid = 'db'+Math.random().toString(36).slice(2,8);
   const full = [kr, en, hashtags].filter(Boolean).join('\n\n');
   const enBlock = en ? `
