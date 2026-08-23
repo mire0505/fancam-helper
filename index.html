@@ -1039,7 +1039,7 @@ ${concertMemo ? '- 콘서트 특이사항: '+concertMemo : ''}
 ${songMemo ? '- 이 곡 특이사항: '+songMemo : ''}
 
 [작성 규칙]
-1. 제목: 아래 TITLE을 그대로 출력. 형식은 "[4K]가수 - 곡명 Fancam│날짜 공연장 콘서트" 계열이며 100자 이내여야 함.
+1. 제목: 아래 TITLE을 그대로 출력. 형식은 "[4K]가수 - 곡명 Fancam│날짜 공연장 대표 콘서트명" 계열이며 대표 투어명 또는 공연명을 포함하고 100자 이내여야 함.
 2. 한국어 설명: ${cfg.descLen}자 내외, 2문단 + CTA 1줄로 작성.
    - 첫 문장은 "${dk}, ${venue}에서 열린 ${concert} ${song} 직캠입니다." 흐름을 기본으로 자연스럽게 작성.
    - 촬영 구역이 있으면 "${zone || '촬영 구역'}에서 담은 무대 시야"라는 느낌을 반영.
@@ -1075,9 +1075,8 @@ ${titleStr}
     };
     const cfg2 = getSettings();
     const hasEn = cfg2.includeEn === 'yes';
-    const parsedTitle = parse('TITLE','DESC_KR') || titleStr;
     results[song] = {
-      title:    sanitizeYouTubeText(enforceTitleLimit(parsedTitle, artist, song, ds, venue, concert)),
+      title:    sanitizeYouTubeText(titleStr),
       descKr:   sanitizeYouTubeText(hasEn ? parse('DESC_KR','DESC_EN') : parse('DESC_KR','HASHTAGS')),
       descEn:   sanitizeYouTubeText(hasEn ? parse('DESC_EN','HASHTAGS') : ''),
       hashtags: sanitizeYouTubeText(parse('HASHTAGS',null))
@@ -1619,9 +1618,10 @@ function loadSettingsUI(){
 
 function buildTitle(artist, song, ds, venue, concert){
   const s = getSettings();
+  const titleArtist = getTitleArtistName(artist) || artist;
   const shortConcert = getShortConcertName(artist, concert);
   const title = s.titleFmt
-    .replace(/{가수}/g, artist)
+    .replace(/{가수}/g, titleArtist)
     .replace(/{곡명}/g, song)
     .replace(/{날짜}/g, ds)
     .replace(/{공연장}/g, venue)
@@ -1638,28 +1638,113 @@ function getTitleArtistName(artist){
   return (cleaned.split(/[\/|,]/)[0] || raw).trim();
 }
 
+function escapeRegExp(text){
+  return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function cleanConcertCandidate(text){
+  return String(text || '')
+    .replace(/^[\s\-–—:|]+|[\s\-–—:|]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripArtistFromConcert(artist, concert){
+  const aliases = String(artist || '')
+    .split(/[\/|,]/)
+    .map(v => v.replace(/\([^)]*\)|\[[^\]]*\]/g, '').trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  const shortArtist = getTitleArtistName(artist);
+  if(shortArtist && !aliases.some(v => v.toLowerCase() === shortArtist.toLowerCase())) aliases.push(shortArtist);
+
+  let value = cleanConcertCandidate(concert);
+  aliases.forEach(alias => {
+    value = value.replace(new RegExp(`^${escapeRegExp(alias)}(?:\\s+|\\s*[-–—:|]\\s*)`, 'i'), '');
+  });
+  return cleanConcertCandidate(value);
+}
+
+function isMeaningfulConcertName(text){
+  const clean = cleanConcertCandidate(text);
+  if(!clean) return false;
+  return !/^(?:world|tour|concert|live|encore|fan\s*meeting|fanmeeting|showcase|in|월드|투어|콘서트|라이브|앙코르|팬미팅|쇼케이스|공연|개막)+$/i.test(clean.replace(/\s+/g, ''));
+}
+
 function getShortConcertName(artist, concert){
   const clean = (concert || '').replace(/\s+/g, ' ').trim();
-  if(!clean || clean.length <= 26) return clean;
-  const artistShort = getTitleArtistName(artist);
-  if(/콘서트|투어|tour|concert|encore|fanmeeting|fan meeting|showcase/i.test(clean) && artistShort){
-    return `${artistShort} 콘서트`;
+  if(!clean) return '';
+
+  const quotePatterns = [
+    /'([^']{2,60})'/,
+    /"([^"]{2,60})"/,
+    /‘([^’]{2,60})’/,
+    /“([^”]{2,60})”/,
+    /「([^」]{2,60})」/,
+    /『([^』]{2,60})』/
+  ];
+  for(const pattern of quotePatterns){
+    const match = clean.match(pattern);
+    if(!match) continue;
+    let representative = cleanConcertCandidate(match[1]);
+    const suffix = clean.slice((match.index || 0) + match[0].length);
+    if(/\bENCORE\b/i.test(suffix) && !/\bENCORE\b/i.test(representative)) representative += ' ENCORE';
+    else if(/앙코르/.test(suffix) && !/앙코르/.test(representative)) representative += ' 앙코르';
+    return cleanConcertCandidate(representative);
   }
-  return clean;
+
+  let working = clean
+    .replace(/^\d{4}(?:[-./]\d{1,2})?\s*/, '')
+    .replace(/[([{][^)\]}]{0,50}(?:개막|막공|공연|회차|DAY\s*\d+|OPENING|FINALE|서울|인천|부산|대구|SEOUL|INCHEON|BUSAN|TOKYO)[^)\]}]*[)\]}]/gi, ' ');
+  working = stripArtistFromConcert(artist, working)
+    .replace(/\s+[-–—]\s+(?:서울|인천|부산|대구|SEOUL|INCHEON|BUSAN|DAEGU|TOKYO|OSAKA).*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const eventMatch = /\b(?:WORLD\s+TOUR|LIVE\s+TOUR|TOUR|CONCERT|LIVE|FAN\s*MEETING|FANMEETING|SHOWCASE)\b|(?:월드\s*투어|투어|콘서트|팬미팅|쇼케이스)/i.exec(working);
+  if(eventMatch){
+    const before = cleanConcertCandidate(working.slice(0, eventMatch.index));
+    let after = cleanConcertCandidate(working.slice(eventMatch.index + eventMatch[0].length));
+    after = after
+      .replace(/^(?:CONCERT|LIVE|TOUR|공연|콘서트)\b\s*/i, '')
+      .replace(/^(?:IN\s+)?(?:서울|인천|부산|대구|SEOUL|INCHEON|BUSAN|DAEGU|TOKYO|OSAKA)(?:\s+.*)?$/i, '')
+      .replace(/\s+IN\s+(?:SEOUL|INCHEON|BUSAN|DAEGU|TOKYO|OSAKA|KOREA|JAPAN)(?:\s+.*)?$/i, '');
+    after = cleanConcertCandidate(after);
+    if(isMeaningfulConcertName(after)) return after;
+    if(isMeaningfulConcertName(before)) return before;
+  }
+
+  const fallback = stripArtistFromConcert(artist, working) || clean;
+  return cleanConcertCandidate(fallback);
+}
+
+function truncateTitlePart(text, maxLength){
+  const clean = String(text || '').trim();
+  if(clean.length <= maxLength) return clean;
+  if(maxLength <= 1) return clean.slice(0, maxLength);
+  return clean.slice(0, maxLength - 1).trimEnd() + '…';
 }
 
 function enforceTitleLimit(title, artist='', song='', ds='', venue='', concert=''){
   let clean = (title || '').replace(/\s+/g, ' ').replace(/\s*│\s*/g, '│').trim();
   if(clean.length <= TITLE_MAX) return clean;
 
-  const base = `[4K]${artist} - ${song} Fancam│${ds} ${venue}`.replace(/\s+/g, ' ').replace(/\s*│\s*/g, '│').trim();
-  const shortConcert = getShortConcertName(artist, concert);
-  let fallback = [base, shortConcert].filter(Boolean).join(' ');
-  if(fallback.length <= TITLE_MAX) return fallback;
+  const titleArtist = truncateTitlePart(getTitleArtistName(artist) || artist, 18);
+  let titleVenue = truncateTitlePart(venue, 20);
+  let shortConcert = truncateTitlePart(getShortConcertName(artist, concert), 30);
+  const prefix = `[4K]${titleArtist} - `;
+  let suffix = ` Fancam│${[ds, titleVenue, shortConcert].filter(Boolean).join(' ')}`;
+  let songRoom = TITLE_MAX - prefix.length - suffix.length;
 
-  const room = TITLE_MAX - base.length - 1;
-  if(room > 4 && shortConcert) return `${base} ${shortConcert.slice(0, room - 1)}…`;
-  return base.length <= TITLE_MAX ? base : base.slice(0, TITLE_MAX);
+  if(songRoom < 6){
+    titleVenue = truncateTitlePart(venue, 16);
+    shortConcert = truncateTitlePart(getShortConcertName(artist, concert), 22);
+    suffix = ` Fancam│${[ds, titleVenue, shortConcert].filter(Boolean).join(' ')}`;
+    songRoom = TITLE_MAX - prefix.length - suffix.length;
+  }
+
+  const safeSong = truncateTitlePart(song, Math.max(4, songRoom));
+  return `${prefix}${safeSong}${suffix}`.slice(0, TITLE_MAX).trim();
 }
 
 function applyOutroTemplate(template, fanclub, song){
@@ -1690,7 +1775,7 @@ function buildHashtagInstruction(){
   const count = s.hashtagCount;
   const langMap = { mixed:'한국어+영어 혼합', korean:'한국어만', english:'영어만' };
   const lang = langMap[s.hashtagLang] || '한국어+영어 혼합';
-  return `팬 유입 최적화 해시태그 ${count}개, ${lang}, 한 줄에 "#태그, #태그"처럼 쉼표로 구분. 가수명/영문명/곡명 한국어·영어 표기/콘서트명/공연장/팬덤명/확실한 멤버명/4K/직캠/Fancam/KpopFancam/ConcertFancam 포함. 중복·근거 없는 태그 금지`;
+  return `팬 유입 최적화 해시태그 ${count}개, ${lang}, 한 줄에 "#태그, #태그"처럼 쉼표로 구분. 가수명/영문명/곡명 한국어·영어 표기/대표 콘서트명/공연장/팬덤명/현재 공식 활동 멤버 중 확실한 멤버명/4K/직캠/Fancam/KpopFancam/ConcertFancam 포함. 탈퇴했거나 그룹을 떠난 전 멤버는 절대 포함하지 않고, 현재 멤버 여부가 확실하지 않으면 해당 멤버명 태그를 생략. 중복·근거 없는 태그 금지`;
 }
 </script>
 </body>
