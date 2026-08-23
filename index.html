@@ -500,6 +500,16 @@ function sanitizeYouTubeText(text){
   return String(text || '').replace(/[<>]/g, '');
 }
 
+function formatYouTubeTagList(hashtags){
+  const clean = sanitizeYouTubeText(hashtags);
+  const hashTags = clean.match(/#[^#,\n]+/g);
+  const tags = hashTags && hashTags.length ? hashTags : clean.split(/[,\n]+/);
+  return tags
+    .map(tag=>tag.replace(/^#+/, '').trim())
+    .filter(Boolean)
+    .join(', ');
+}
+
 function getDB(){
   try{
     // 고정 키에서 불러오기
@@ -1137,7 +1147,7 @@ ${hashtagBlock}
         <div class="result-box">
           <div class="result-label">해시태그</div>
           <button class="copy-btn" onclick="cpId('${hid}')">복사</button>
-          <div class="result-text" id="${hid}">${esc(r.hashtags)}</div>
+          <div class="result-text" id="${hid}">${esc(formatYouTubeTagList(r.hashtags))}</div>
         </div>
       </div>`;
     }).join('');
@@ -1272,7 +1282,7 @@ function openDetail(id){
   document.getElementById('d-results').innerHTML =
     drb('유튜브 제목', e.title, 'dt') +
     drbDesc('설명 전체', e.descKr, e.descEn, e.hashtags) +
-    drb('해시태그', e.hashtags, 'dh');
+    drb('해시태그', formatYouTubeTagList(e.hashtags), 'dh');
   document.getElementById('overlay').style.display = 'flex';
 }
 
