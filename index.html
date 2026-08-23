@@ -1671,9 +1671,50 @@ function isMeaningfulConcertName(text){
   return !/^(?:world|tour|concert|live|encore|fan\s*meeting|fanmeeting|showcase|in|월드|투어|콘서트|라이브|앙코르|팬미팅|쇼케이스|공연|개막)+$/i.test(clean.replace(/\s+/g, ''));
 }
 
+function getConcertLocationSuffix(concert){
+  const clean = String(concert || '').replace(/\s+/g, ' ').trim();
+  if(!clean) return '';
+
+  const locations = [
+    { en:'SEOUL', aliases:['SEOUL','서울'] },
+    { en:'INCHEON', aliases:['INCHEON','인천'] },
+    { en:'GOYANG', aliases:['GOYANG','고양'] },
+    { en:'BUSAN', aliases:['BUSAN','부산'] },
+    { en:'DAEGU', aliases:['DAEGU','대구'] },
+    { en:'TOKYO', aliases:['TOKYO','도쿄'] },
+    { en:'OSAKA', aliases:['OSAKA','오사카'] },
+    { en:'BANGKOK', aliases:['BANGKOK','방콕'] },
+    { en:'MANILA', aliases:['MANILA','마닐라'] },
+    { en:'SINGAPORE', aliases:['SINGAPORE','싱가포르'] },
+    { en:'JAKARTA', aliases:['JAKARTA','자카르타'] },
+    { en:'TAIPEI', aliases:['TAIPEI','타이베이'] },
+    { en:'HONG KONG', aliases:['HONG KONG','홍콩'] }
+  ];
+
+  const explicit = clean.match(/\bIN\s+(SEOUL|INCHEON|GOYANG|BUSAN|DAEGU|TOKYO|OSAKA|BANGKOK|MANILA|SINGAPORE|JAKARTA|TAIPEI|HONG\s+KONG)\b/i);
+  if(explicit) return `IN ${explicit[1].replace(/\s+/g, ' ').toUpperCase()}`;
+
+  for(const location of locations){
+    for(const alias of location.aliases){
+      const pattern = new RegExp(`(?:^|[\\s\\-–—:(\\[{])${escapeRegExp(alias)}(?=$|[\\s\\-–—:)\\]}]|공연|콘서트|개막|막공)`, 'i');
+      if(pattern.test(clean)) return `IN ${location.en}`;
+    }
+  }
+  return '';
+}
+
+function appendConcertLocation(name, location){
+  const clean = cleanConcertCandidate(name);
+  if(!clean || !location) return clean;
+  const city = location.replace(/^IN\s+/i, '');
+  if(new RegExp(`\\bIN\\s+${escapeRegExp(city)}\\b`, 'i').test(clean)) return clean;
+  return `${clean} ${location}`;
+}
+
 function getShortConcertName(artist, concert){
   const clean = (concert || '').replace(/\s+/g, ' ').trim();
   if(!clean) return '';
+  const location = getConcertLocationSuffix(clean);
 
   const quotePatterns = [
     /'([^']{2,60})'/,
@@ -1690,7 +1731,7 @@ function getShortConcertName(artist, concert){
     const suffix = clean.slice((match.index || 0) + match[0].length);
     if(/\bENCORE\b/i.test(suffix) && !/\bENCORE\b/i.test(representative)) representative += ' ENCORE';
     else if(/앙코르/.test(suffix) && !/앙코르/.test(representative)) representative += ' 앙코르';
-    return cleanConcertCandidate(representative);
+    return appendConcertLocation(representative, location);
   }
 
   let working = clean
@@ -1709,13 +1750,14 @@ function getShortConcertName(artist, concert){
       .replace(/^(?:CONCERT|LIVE|TOUR|공연|콘서트)\b\s*/i, '')
       .replace(/^(?:IN\s+)?(?:서울|인천|부산|대구|SEOUL|INCHEON|BUSAN|DAEGU|TOKYO|OSAKA)(?:\s+.*)?$/i, '')
       .replace(/\s+IN\s+(?:SEOUL|INCHEON|BUSAN|DAEGU|TOKYO|OSAKA|KOREA|JAPAN)(?:\s+.*)?$/i, '');
+    if(location) after = after.replace(new RegExp(`(?:^|\\s+)${escapeRegExp(location)}$`, 'i'), '');
     after = cleanConcertCandidate(after);
-    if(isMeaningfulConcertName(after)) return after;
-    if(isMeaningfulConcertName(before)) return before;
+    if(isMeaningfulConcertName(after)) return appendConcertLocation(after, location);
+    if(isMeaningfulConcertName(before)) return appendConcertLocation(before, location);
   }
 
   const fallback = stripArtistFromConcert(artist, working) || clean;
-  return cleanConcertCandidate(fallback);
+  return appendConcertLocation(fallback, location);
 }
 
 function truncateTitlePart(text, maxLength){
@@ -1725,20 +1767,32 @@ function truncateTitlePart(text, maxLength){
   return clean.slice(0, maxLength - 1).trimEnd() + '…';
 }
 
+function truncateConcertTitlePart(text, maxLength){
+  const clean = String(text || '').trim();
+  if(clean.length <= maxLength) return clean;
+  const location = getConcertLocationSuffix(clean);
+  if(!location) return truncateTitlePart(clean, maxLength);
+
+  const core = clean.replace(new RegExp(`\\s+${escapeRegExp(location)}$`, 'i'), '').trim();
+  const coreRoom = maxLength - location.length - 1;
+  if(core && coreRoom >= 3) return `${truncateTitlePart(core, coreRoom)} ${location}`;
+  return truncateTitlePart(clean, maxLength);
+}
+
 function enforceTitleLimit(title, artist='', song='', ds='', venue='', concert=''){
   let clean = (title || '').replace(/\s+/g, ' ').replace(/\s*│\s*/g, '│').trim();
   if(clean.length <= TITLE_MAX) return clean;
 
   const titleArtist = truncateTitlePart(getTitleArtistName(artist) || artist, 18);
   let titleVenue = truncateTitlePart(venue, 20);
-  let shortConcert = truncateTitlePart(getShortConcertName(artist, concert), 30);
+  let shortConcert = truncateConcertTitlePart(getShortConcertName(artist, concert), 30);
   const prefix = `[4K]${titleArtist} - `;
   let suffix = ` Fancam│${[ds, titleVenue, shortConcert].filter(Boolean).join(' ')}`;
   let songRoom = TITLE_MAX - prefix.length - suffix.length;
 
   if(songRoom < 6){
     titleVenue = truncateTitlePart(venue, 16);
-    shortConcert = truncateTitlePart(getShortConcertName(artist, concert), 22);
+    shortConcert = truncateConcertTitlePart(getShortConcertName(artist, concert), 22);
     suffix = ` Fancam│${[ds, titleVenue, shortConcert].filter(Boolean).join(' ')}`;
     songRoom = TITLE_MAX - prefix.length - suffix.length;
   }
