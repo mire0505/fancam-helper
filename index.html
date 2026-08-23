@@ -1721,6 +1721,12 @@ function appendConcertLocation(name, location){
   return `${clean} ${location}`;
 }
 
+function removeConcertLocation(name, location){
+  const clean = cleanConcertCandidate(name);
+  if(!clean || !location) return clean;
+  return cleanConcertCandidate(clean.replace(new RegExp(`\\b${escapeRegExp(location)}\\b`, 'ig'), ' '));
+}
+
 function getShortConcertName(artist, concert){
   const clean = (concert || '').replace(/\s+/g, ' ').trim();
   if(!clean) return '';
@@ -1760,7 +1766,8 @@ function getShortConcertName(artist, concert){
       .replace(/^(?:CONCERT|LIVE|TOUR|공연|콘서트)\b\s*/i, '')
       .replace(/^(?:IN\s+)?(?:서울|인천|부산|대구|SEOUL|INCHEON|BUSAN|DAEGU|TOKYO|OSAKA)(?:\s+.*)?$/i, '')
       .replace(/\s+IN\s+(?:SEOUL|INCHEON|BUSAN|DAEGU|TOKYO|OSAKA|KOREA|JAPAN)(?:\s+.*)?$/i, '');
-    if(location) after = after.replace(new RegExp(`(?:^|\\s+)${escapeRegExp(location)}$`, 'i'), '');
+    after = removeConcertLocation(after, location)
+      .replace(/\s+(?:(?:presented|sponsored|powered)\s+by)\s+.*$/i, '');
     after = cleanConcertCandidate(after);
     if(isMeaningfulConcertName(after)) return appendConcertLocation(after, location);
     if(isMeaningfulConcertName(before)) return appendConcertLocation(before, location);
@@ -1783,7 +1790,7 @@ function truncateConcertTitlePart(text, maxLength){
   const location = getConcertLocationSuffix(clean);
   if(!location) return truncateTitlePart(clean, maxLength);
 
-  const core = clean.replace(new RegExp(`\\s+${escapeRegExp(location)}$`, 'i'), '').trim();
+  const core = removeConcertLocation(clean, location);
   const coreRoom = maxLength - location.length - 1;
   if(core && coreRoom >= 3) return `${truncateTitlePart(core, coreRoom)} ${location}`;
   return truncateTitlePart(clean, maxLength);
