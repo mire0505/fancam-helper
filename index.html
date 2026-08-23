@@ -500,14 +500,47 @@ function sanitizeYouTubeText(text){
   return String(text || '').replace(/[<>]/g, '');
 }
 
-function formatYouTubeTagList(hashtags){
+function splitHashtagItems(hashtags){
   const clean = sanitizeYouTubeText(hashtags);
   const hashTags = clean.match(/#[^#,\n]+/g);
   const tags = hashTags && hashTags.length ? hashTags : clean.split(/[,\n]+/);
   return tags
     .map(tag=>tag.replace(/^#+/, '').trim())
-    .filter(Boolean)
+    .filter(Boolean);
+}
+
+function normalizeHashtagKey(tag){
+  return String(tag || '').normalize('NFKC').toUpperCase().replace(/[^0-9A-Z가-힣]/g, '');
+}
+
+function isBlockedHashtag(tag, artist=''){
+  const key = normalizeHashtagKey(tag);
+  if(!key) return true;
+  if(/(?:없음|제외|탈퇴|미포함|전멤버|구멤버)/.test(key)) return true;
+  if(/(?:FORMERMEMBER|EXMEMBER|NOTMEMBER|WITHOUTMEMBER)/.test(key)) return true;
+
+  const artistKey = normalizeHashtagKey(artist);
+  const isBigBang = artistKey.includes('빅뱅') || artistKey.includes('BIGBANG');
+  if(isBigBang && (key.includes('승리') || key.includes('SEUNGRI') || key === 'VI')) return true;
+  return false;
+}
+
+function sanitizeGeneratedHashtags(hashtags, artist=''){
+  const seen = new Set();
+  return splitHashtagItems(hashtags)
+    .filter(tag=>!isBlockedHashtag(tag, artist))
+    .filter(tag=>{
+      const key = normalizeHashtagKey(tag);
+      if(seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map(tag=>`#${tag}`)
     .join(', ');
+}
+
+function formatYouTubeTagList(hashtags){
+  return splitHashtagItems(hashtags).join(', ');
 }
 
 function getDB(){
@@ -532,7 +565,15 @@ function getDB(){
         localStorage.removeItem(k); // 이전 키 삭제
       }
     });
-    if(migrated){
+    let cleaned = false;
+    main.forEach(entry=>{
+      const safeHashtags = sanitizeGeneratedHashtags(entry.hashtags, entry.artist);
+      if(safeHashtags !== (entry.hashtags || '')){
+        entry.hashtags = safeHashtags;
+        cleaned = true;
+      }
+    });
+    if(migrated || cleaned){
       main.sort((a,b)=>b.id-a.id);
       localStorage.setItem(DB_KEY, JSON.stringify(main));
     }
@@ -1089,7 +1130,7 @@ ${titleStr}
       title:    sanitizeYouTubeText(titleStr),
       descKr:   sanitizeYouTubeText(hasEn ? parse('DESC_KR','DESC_EN') : parse('DESC_KR','HASHTAGS')),
       descEn:   sanitizeYouTubeText(hasEn ? parse('DESC_EN','HASHTAGS') : ''),
-      hashtags: sanitizeYouTubeText(parse('HASHTAGS',null))
+      hashtags: sanitizeGeneratedHashtags(parse('HASHTAGS',null), artist)
     };
   }catch(er){ results[song]=null; alert(`"${song}" 생성 실패: ${er.message || '다시 시도해주세요.'}`); }
   if(btn){ btn.disabled=false; btn.textContent='재생성'; }
@@ -1118,6 +1159,7 @@ function renderResultsArea(){
     </div>` +
     done.map((s,i) => {
       const r = results[s]; if(!r) return '';
+      r.hashtags = sanitizeGeneratedHashtags(r.hashtags, document.getElementById('artist').value.trim());
       const tid='rt'+i, krid='rk'+i, enid='re'+i, hid='rh'+i, bid='rb'+i;
       const enBlock = r.descEn ? `
           <div class="lang-label">🇺🇸 English</div>
@@ -1186,9 +1228,10 @@ function saveByIdx(i){
 
 function makeSavedEntry(song, id=Date.now()){
   const r = results[song];
+  const artist = document.getElementById('artist').value.trim();
   return {
     id, song,
-    artist:       document.getElementById('artist').value.trim(),
+    artist,
     concert:      document.getElementById('concert').value.trim(),
     venue:        getVenue(),
     date:         document.getElementById('date').value,
@@ -1196,7 +1239,8 @@ function makeSavedEntry(song, id=Date.now()){
     fanclub:      document.getElementById('fanclub').value.trim(),
     concertMemo:  document.getElementById('concert-memo').value.trim(),
     songMemo:     songMemos[song] || '',
-    ...r
+    ...r,
+    hashtags: sanitizeGeneratedHashtags(r.hashtags, artist)
   };
 }
 
@@ -1276,13 +1320,14 @@ function renderHistory(){
 
 function openDetail(id){
   const e = getDB().find(x=>x.id===id); if(!e) return;
+  const safeHashtags = sanitizeGeneratedHashtags(e.hashtags, e.artist);
   currentDetailId = id;
   document.getElementById('d-title').textContent = `${e.artist} — ${e.song}`;
   document.getElementById('d-meta').innerHTML = [e.concert,e.venue,e.date].filter(Boolean).map(t=>`<span class="htag">${esc(t)}</span>`).join('');
   document.getElementById('d-results').innerHTML =
     drb('유튜브 제목', e.title, 'dt') +
-    drbDesc('설명 전체', e.descKr, e.descEn, e.hashtags) +
-    drb('해시태그', formatYouTubeTagList(e.hashtags), 'dh');
+    drbDesc('설명 전체', e.descKr, e.descEn, safeHashtags) +
+    drb('해시태그', formatYouTubeTagList(safeHashtags), 'dh');
   document.getElementById('overlay').style.display = 'flex';
 }
 
@@ -1846,7 +1891,7 @@ function buildHashtagInstruction(){
   const count = s.hashtagCount;
   const langMap = { mixed:'한국어+영어 혼합', korean:'한국어만', english:'영어만' };
   const lang = langMap[s.hashtagLang] || '한국어+영어 혼합';
-  return `팬 유입 최적화 해시태그 ${count}개, ${lang}, 한 줄에 "#태그, #태그"처럼 쉼표로 구분. 가수명/영문명/곡명 한국어·영어 표기/대표 콘서트명/공연장/팬덤명/현재 공식 활동 멤버 중 확실한 멤버명/4K/직캠/Fancam/KpopFancam/ConcertFancam 포함. 탈퇴했거나 그룹을 떠난 전 멤버는 절대 포함하지 않고, 현재 멤버 여부가 확실하지 않으면 해당 멤버명 태그를 생략. 중복·근거 없는 태그 금지`;
+  return `팬 유입 최적화 해시태그 ${count}개, ${lang}, 한 줄에 "#태그, #태그"처럼 쉼표로 구분. 가수명/영문명/곡명 한국어·영어 표기/대표 콘서트명/공연장/팬덤명/현재 공식 활동 멤버 중 확실한 멤버명/4K/직캠/Fancam/KpopFancam/ConcertFancam 포함. 멤버 이름은 현재 공식 활동 멤버라고 확실한 경우에만 사용하고, 사람의 부재·제외 여부나 확인 문구를 태그로 만들지 않음. 중복·근거 없는 태그 금지`;
 }
 </script>
 </body>
